@@ -415,3 +415,210 @@ test_that("regressed eta validation rejects incompatible inputs", {
   bad_v$w <- matrix(1, d$nv, 5) # mismatch with w in regression
   expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs", validation = bad_v), "cols")
 })
+
+test_that("mcglm handles w supplied as formula, character, and data.frame", {
+  d <- .cs_regressed_fixture(family = "poisson", n = 400L, nv = 150L)
+  df <- data.frame(y = d$y, z = factor(d$zh), x1 = d$x[, 2])
+
+  # Formula interface with w as formula
+  fit_w_form <- mcglm(y ~ mc(z) + x1, data = df, family = "poisson", method = "cs",
+                      w = ~ x1, validation = d$v)
+  expect_true(all(is.finite(coef(fit_w_form, method = "cs"))))
+
+  # Formula interface with w as character
+  fit_w_char <- mcglm(y ~ mc(z) + x1, data = df, family = "poisson", method = "cs",
+                      w = "x1", validation = d$v)
+  expect_equal(coef(fit_w_form, method = "cs"), coef(fit_w_char, method = "cs"))
+
+  # Formula interface with w as data.frame (including intercept)
+  w_df <- data.frame(1, x1 = df$x1)
+  fit_w_df <- mcglm(y ~ mc(z) + x1, data = df, family = "poisson", method = "cs",
+                    w = w_df, validation = d$v)
+  expect_equal(coef(fit_w_form, method = "cs"), coef(fit_w_df, method = "cs"))
+
+  # mclm with w as formula
+  fit_mclm_w <- mclm(y ~ mc(z) + x1, data = df, method = "cs", w = ~ x1, validation = d$v)
+  expect_true(all(is.finite(coef(fit_mclm_w, method = "cs"))))
+
+  # mclm with cs_akn and validation
+  fit_mclm_akn <- mclm(y ~ mc(z) + x1, data = df, method = "cs_akn", w = ~ x1, validation = d$v)
+  expect_true(all(is.finite(coef(fit_mclm_akn, method = "cs_akn"))))
+
+  # mclm with eta
+  fit_mclm_eta <- mclm(y ~ mc(z) + x1, data = df, method = "cs", eta = d$eta_true)
+  expect_true(all(is.finite(coef(fit_mclm_eta, method = "cs"))))
+})
+
+test_that("c1 and c2 validation checks catch invalid inputs", {
+  d <- .cs_regressed_fixture(n = 100L, nv = 50L)
+  df <- data.frame(y = d$y, z = factor(d$zh), x1 = d$x[, 2])
+
+  # In formula interface
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = "bad"), "c1 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = c(1, 2)), "c1 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = Inf), "c1 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = "bad"), "c2 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = c(1, 2)), "c2 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = NaN), "c2 must be one finite numeric value")
+
+  # In matrix interface (.mcglm_fit)
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = "bad"), "c1 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = c(1, 2)), "c1 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = Inf), "c1 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = "bad"), "c2 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = c(1, 2)), "c2 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = NaN), "c2 must be one finite numeric value")
+})
+
+test_that("validation requires cs or cs_akn method", {
+  d <- .cs_regressed_fixture(n = 100L, nv = 50L)
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, method = "naive", validation = d$v),
+               "validation requires method = 'cs' or 'cs_akn'")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, method = "bca", validation = d$v),
+               "validation requires method = 'cs' or 'cs_akn'")
+})
+
+test_that("cs_akn clamping warns when Delta is near zero", {
+  d <- .cs_regressed_fixture(n = 100L, nv = 50L)
+  expect_warning(
+    mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs_akn",
+          p01 = 0.5, p10 = 0.5),
+    "clamping applied"
+  )
+  expect_warning(
+    mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs_akn",
+          p01 = 0.5002, p10 = 0.5002),
+    "clamping applied"
+  )
+})
+
+test_that("cs_akn solver failure returns NA and warns", {
+  expect_warning(
+    res <- mismeasured:::.mcglm_fit_cs_akn(
+      c(30, -30), c(rep(100, 5), rep(0, 5)),
+      matrix(c(rep(-10, 5), rep(10, 5)), 10, 1),
+      matrix(c(rep(1, 5), rep(-1, 5)), 10, 1),
+      K = 2L, family = "poisson"
+    ),
+    "did not converge"
+  )
+  expect_true(all(is.na(res)))
+})
+
+test_that("unit weights work with cs_akn validation and cs regressed eta", {
+  d <- .cs_regressed_fixture(family = "poisson", n = 400L, nv = 150L)
+  unit_wt <- rep(1, d$n)
+
+  # cs_akn with validation and weights
+  fit_akn_wt <- mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs_akn",
+                      validation = d$v, weights = unit_wt)
+  expect_true(all(is.finite(coef(fit_akn_wt, method = "cs_akn"))))
+  expect_true(all(is.finite(vcov(fit_akn_wt, method = "cs_akn"))))
+
+  # cs with regressed eta and weights
+  fit_cs_wt <- mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs",
+                     eta = d$eta_true, weights = unit_wt)
+  expect_true(all(is.finite(coef(fit_cs_wt, method = "cs"))))
+  expect_true(all(is.finite(vcov(fit_cs_wt, method = "cs"))))
+})
+
+test_that(".mcglm_normalize_eta handles glm, lm, and error branches", {
+  d <- .cs_regressed_fixture(n = 200L, nv = 100L)
+  df_val <- data.frame(z = d$v$z, zh = d$zh[d$v$index], x1 = d$x[d$v$index, 2])
+
+  # Fitted glm objects directly into .mcglm_normalize_eta
+  g_rho <- stats::glm(z ~ x1, data = df_val, family = stats::binomial)
+  g_01  <- stats::glm(zh ~ x1, data = df_val[df_val$z == 0, ], family = stats::binomial)
+  g_10  <- stats::glm(I(1 - zh) ~ x1, data = df_val[df_val$z == 1, ], family = stats::binomial)
+  norm_glm <- mismeasured:::.mcglm_normalize_eta(list(rho = g_rho, p01 = g_01, p10 = g_10), 2)
+  expect_equal(norm_glm$rho, unname(coef(g_rho)))
+  expect_equal(norm_glm$p01, unname(coef(g_01)))
+  expect_equal(norm_glm$p10, unname(coef(g_10)))
+
+  # Fitted lm objects
+  l_rho <- stats::lm(z ~ x1, data = df_val)
+  norm_lm <- mismeasured:::.mcglm_normalize_eta(list(rho = l_rho, p01 = g_01, p10 = g_10), 2)
+  expect_equal(norm_lm$rho, unname(coef(l_rho)))
+
+  # mcglm with eta list
+  fit_eta_norm <- mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs", eta = d$eta_true)
+  expect_true(all(is.finite(coef(fit_eta_norm, method = "cs"))))
+
+  # Error: non-numeric or non-finite
+  expect_error(mismeasured:::.mcglm_normalize_eta(list(rho = "a", p01 = c(1,1), p10 = c(1,1)), 2),
+               "must be numeric")
+  expect_error(mismeasured:::.mcglm_normalize_eta(list(rho = c(NaN, 1), p01 = c(1,1), p10 = c(1,1)), 2),
+               "must be numeric")
+
+  # Error: wrong length in list
+  expect_error(mismeasured:::.mcglm_normalize_eta(list(rho = 1, p01 = c(1,1), p10 = c(1,1)), 2),
+               "has length 1, but w has 2")
+
+  # Error: missing elements in list
+  expect_error(mismeasured:::.mcglm_normalize_eta(list(rho = c(1,1)), 2),
+               "must contain 'rho', 'p01', and 'p10'")
+
+  # Numeric vector of length 3 * q
+  norm_vec <- mismeasured:::.mcglm_normalize_eta(rep(0.2, 6), 2)
+  expect_equal(length(norm_vec$rho), 2L)
+  expect_equal(length(norm_vec$p01), 2L)
+  expect_equal(length(norm_vec$p10), 2L)
+
+  # Error: numeric vector wrong length or non-finite
+  expect_error(mismeasured:::.mcglm_normalize_eta(c(1, 2, 3), 2), "must have length 3 \\* ncol")
+  expect_error(mismeasured:::.mcglm_normalize_eta(c(1, 2, 3, 4, 5, Inf), 2), "must have length 3 \\* ncol")
+
+  # Error: non-numeric non-list
+  expect_error(mismeasured:::.mcglm_normalize_eta("bad", 2), "must be a named list")
+})
+
+test_that(".mcglm_prepare_cs_validation branches and errors are covered", {
+  d <- .cs_regressed_fixture(n = 200L, nv = 100L)
+
+  # Passing eta WITH validation list
+  fit_eta_val <- mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs",
+                       eta = d$eta_true, validation = d$v)
+  expect_true(all(is.finite(coef(fit_eta_val, method = "cs"))))
+
+  # validation$x supplied instead of validation$w
+  v_x <- d$v
+  v_x$x <- d$w[d$v$index, , drop = FALSE]
+  v_x$w <- NULL
+  fit_vx <- mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs", validation = v_x)
+  expect_true(all(is.finite(coef(fit_vx, method = "cs"))))
+
+  # w specified in mcglm with internal validation
+  fit_w_int <- mcglm(d$y, z_hat = d$zh, x = d$x, w = d$w, method = "cs", validation = d$v)
+  expect_true(all(is.finite(coef(fit_w_int, method = "cs"))))
+
+  # External validation without w when x has multiple columns
+  expect_error(
+    mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs",
+          validation = list(z = d$v$z, z_hat = d$zh[1:d$nv])),
+    "supply w in validation list"
+  )
+
+  # External validation without w when x has 1 column
+  fit_ext_1col <- mcglm(d$y, z_hat = d$zh, x = matrix(1, d$n, 1), method = "cs",
+                        validation = list(z = d$v$z, z_hat = d$zh[1:d$nv]))
+  expect_true(all(is.finite(coef(fit_ext_1col, method = "cs"))))
+
+  # validation$z missing category 0 or 1
+  expect_error(
+    mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs",
+          validation = list(z = rep(1L, d$nv), index = d$v$index)),
+    "Every true category must occur"
+  )
+  expect_error(
+    mcglm(d$y, z_hat = d$zh, x = d$x, method = "cs",
+          validation = list(z = rep(0L, d$nv), index = d$v$index)),
+    "Every true category must occur"
+  )
+
+  # Ginv fallback in .mcglm_vcov_cs_akn
+  V_sing <- mismeasured:::.mcglm_vcov_cs_akn(
+    c(0, 0), rep(1, 10), matrix(0, 10, 1), matrix(0, 10, 1),
+    K = 2L, family = "gaussian"
+  )
+  expect_true(is.matrix(V_sing))
+})

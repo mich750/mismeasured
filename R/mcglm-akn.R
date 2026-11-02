@@ -228,7 +228,7 @@
       p01_v <- if (!is.null(validation$p01)) validation$p01 else p01
       p10_v <- if (!is.null(validation$p10)) validation$p10 else p10
       Delta <- 1 - p01_v - p10_v
-      Delta <- ifelse(abs(Delta) < 0.05, ifelse(Delta >= 0, 0.05, -0.05), Delta)
+      Delta <- ifelse(abs(Delta) < 0.001, ifelse(Delta >= 0, 0.001, -0.001), Delta)
       v01 <- p01_v * (1 - p01_v)
       v10 <- p10_v * (1 - p10_v)
 

@@ -4,7 +4,20 @@
 \alias{.mcglm_vcov_cs_akn}
 \title{Sandwich variance for cs_akn}
 \usage{
-.mcglm_vcov_cs_akn(psi, y, x_akn, x, K, family, wt = NULL)
+.mcglm_vcov_cs_akn(
+  psi,
+  y,
+  x_akn,
+  x,
+  K,
+  family,
+  wt = NULL,
+  validation = NULL,
+  w = NULL,
+  p01 = NULL,
+  p10 = NULL,
+  z_hat = NULL
+)
 }
 \description{
 Sandwich variance for cs_akn
