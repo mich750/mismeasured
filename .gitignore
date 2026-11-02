@@ -16,3 +16,4 @@ package.json
 package-lock.json
 *.Rcheck/
 ..Rcheck/
+.Rproj.user

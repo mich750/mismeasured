@@ -188,14 +188,18 @@
   }
   sol <- nleqslv::nleqslv(psi_init, score_mean, jac = score_jac,
                           control = list(maxit = 500, ftol = 1e-12))
-  if (sol$termcd > 2)
-    warning("cs_akn solver did not converge (termcd = ", sol$termcd, ")")
+  if (sol$termcd > 2) {
+    warning("cs_akn solver did not converge (termcd = ", sol$termcd, ")", call. = FALSE)
+    return(rep(NA_real_, length(psi_init)))
+  }
   sol$x
 }
 
 #' Sandwich variance for cs_akn
 #' @keywords internal
-.mcglm_vcov_cs_akn <- function(psi, y, x_akn, x, K, family, wt = NULL) {
+.mcglm_vcov_cs_akn <- function(psi, y, x_akn, x, K, family, wt = NULL,
+                               validation = NULL, w = NULL,
+                               p01 = NULL, p10 = NULL, z_hat = NULL) {
   fam <- .normalize_family(family)
   n   <- length(y)
   N   <- if (is.null(wt)) n else sum(wt)
@@ -206,8 +210,64 @@
   } else {
     S <- crossprod(Phi * wt, Phi) / N
   }
+
+  if (!is.null(validation)) {
+    nv <- validation$n
+    if (isTRUE(validation$regressed) && K == 2L) {
+      p <- length(psi)
+      w_use <- if (!is.null(validation$w)) as.matrix(validation$w) else if (!is.null(w)) as.matrix(w) else as.matrix(x)
+      q <- ncol(w_use)
+
+      gamma <- psi[1L]
+      alpha <- psi[-1L]
+      alpha_lin <- as.numeric(x %*% alpha)
+      mu1 <- fam$linkinv(gamma + alpha_lin)
+      mu0 <- fam$linkinv(alpha_lin)
+      delta <- mu1 - mu0
+
+      p01_v <- if (!is.null(validation$p01)) validation$p01 else p01
+      p10_v <- if (!is.null(validation$p10)) validation$p10 else p10
+      Delta <- 1 - p01_v - p10_v
+      Delta <- ifelse(abs(Delta) < 0.05, ifelse(Delta >= 0, 0.05, -0.05), Delta)
+      v01 <- p01_v * (1 - p01_v)
+      v10 <- p10_v * (1 - p10_v)
+
+      D_rho <- matrix(0, p, q)
+      D_01  <- matrix(0, p, q)
+      weight_01 <- (1 - p10_v - z_hat) / (Delta^2) * v01
+      if (is.null(wt)) {
+        D_01[1L, ]  <- -colMeans((y - mu1) * weight_01 * w_use)
+        D_01[-1L, ] <- crossprod(x * (delta * weight_01), w_use) / n
+      } else {
+        D_01[1L, ]  <- -colSums(wt * (y - mu1) * weight_01 * w_use) / N
+        D_01[-1L, ] <- crossprod(x * (wt * delta * weight_01), w_use) / N
+      }
+
+      D_10  <- matrix(0, p, q)
+      weight_10 <- (z_hat - p01_v) / (Delta^2) * v10
+      if (is.null(wt)) {
+        D_10[1L, ]  <- colMeans((y - mu1) * weight_10 * w_use)
+        D_10[-1L, ] <- -crossprod(x * (delta * weight_10), w_use) / n
+      } else {
+        D_10[1L, ]  <- colSums(wt * (y - mu1) * weight_10 * w_use) / N
+        D_10[-1L, ] <- -crossprod(x * (wt * delta * weight_10), w_use) / N
+      }
+
+      D_mat <- cbind(D_rho, D_01, D_10)
+      U <- validation$s %*% t(D_mat)
+
+      S <- S + (n / nv) * crossprod(U) / nv
+      if (!is.null(validation$index)) {
+        phi_v <- Phi[validation$index, , drop = FALSE]
+        phi_v <- sweep(phi_v, 2, colMeans(phi_v))
+        cross <- crossprod(phi_v, U) / nv
+        S <- S + cross + t(cross)
+      }
+    }
+  }
+
   I_akn <- .akn_information(psi, y, x_akn, x, K, fam, wt = wt)
   J     <- -I_akn
-  J_inv <- solve(J)
+  J_inv <- tryCatch(solve(J), error = function(e) MASS::ginv(J))
   J_inv %*% S %*% t(J_inv) / N
 }

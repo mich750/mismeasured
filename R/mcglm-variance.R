@@ -293,12 +293,13 @@
 # K>2. For K=2, B[2,1]=c1 and B[1,2]=c1-c2; this is exactly the binary
 # (pi,p01,p10) influence-function formula by the chain rule.
 .mcglm_prepare_cs_validation <- function(validation, z_hat, K, wt,
-                                          c1, c2, Pi, pi_z) {
+                                          c1, c2, Pi, pi_z,
+                                          x = NULL, w = NULL, eta = NULL) {
   if (!is.null(wt) && any(wt != 1))
     stop("validation currently requires unweighted observations or unit weights.",
          call. = FALSE)
   if (!is.list(validation) || is.null(validation$z) ||
-      any(!names(validation) %in% c("z", "z_hat", "index")))
+      any(!names(validation) %in% c("z", "z_hat", "index", "w", "x")))
     stop("validation must be a list with z and z_hat (external) or index (internal).",
          call. = FALSE)
   z <- validation$z
@@ -327,28 +328,183 @@
   if (!check_codes(proxy))
     stop("validation$z_hat must contain one code in 0, ..., K-1 per z.",
          call. = FALSE)
-  cells <- proxy + 1L + K * z  # column-major vec(B), as in the paper
-  b <- tabulate(cells, nbins = K * K) / nv
-  B <- matrix(b, K, K)
-  if (any(colSums(B) == 0))
+
+  is_regressed <- (K == 2L) && (!is.null(eta) || !is.null(w) ||
+    !is.null(validation$w) || !is.null(validation$x) ||
+    (is.null(c1) && is.null(Pi) && is.null(pi_z)) ||
+    (length(c1) > 1L || length(c2) > 1L))
+
+  if (!is_regressed || K > 2L) {
+    cells <- proxy + 1L + K * z  # column-major vec(B), as in the paper
+    b <- tabulate(cells, nbins = K * K) / nv
+    B <- matrix(b, K, K)
+    if (any(colSums(B) == 0))
+      stop("Every true category must occur in validation.", call. = FALSE)
+    expected <- if (K == 2L) c(B[2, 1], B[2, 1] - B[1, 2]) else b
+    supplied <- if (K == 2L) c(c1, c2) else as.numeric(sweep(Pi, 2, pi_z, "*"))
+    if (length(supplied) != length(expected) || any(!is.finite(supplied)) ||
+        max(abs(supplied - expected)) > 1e-8)
+      stop("CS probabilities must be empirical estimates from the supplied validation sample; ",
+           "supply pi_z explicitly (or c1/c2 for K=2).", call. = FALSE)
+    return(list(b = b, cells = cells, index = index, n = nv, regressed = FALSE,
+                type = if (is.null(index)) "external" else "internal"))
+  }
+
+  # Regressed parameters eta (K = 2)
+  idx0 <- which(z == 0L)
+  idx1 <- which(z == 1L)
+  if (length(idx0) == 0L || length(idx1) == 0L)
     stop("Every true category must occur in validation.", call. = FALSE)
-  expected <- if (K == 2L) c(B[2, 1], B[2, 1] - B[1, 2]) else b
-  supplied <- if (K == 2L) c(c1, c2) else as.numeric(sweep(Pi, 2, pi_z, "*"))
-  if (length(supplied) != length(expected) || any(!is.finite(supplied)) ||
-      max(abs(supplied - expected)) > 1e-8)
-    stop("CS probabilities must be empirical estimates from the supplied validation sample; ",
-         "supply pi_z explicitly (or c1/c2 for K=2).", call. = FALSE)
-  list(b = b, cells = cells, index = index, n = nv,
-       type = if (is.null(index)) "external" else "internal")
+
+  if (!is.null(validation$w)) {
+    w_val <- as.matrix(validation$w)
+  } else if (!is.null(validation$x)) {
+    w_val <- as.matrix(validation$x)
+  } else if (!is.null(index)) {
+    if (!is.null(w)) {
+      w_val <- as.matrix(w)[index, , drop = FALSE]
+    } else {
+      w_val <- as.matrix(x)[index, , drop = FALSE]
+    }
+  } else {
+    if (!is.null(w) || (!is.null(x) && ncol(as.matrix(x)) > 1L)) {
+      stop("For external validation with regressed eta, supply w in validation list.",
+           call. = FALSE)
+    } else {
+      w_val <- matrix(1, nv, 1)
+    }
+  }
+
+  q <- ncol(w_val)
+  n <- length(z_hat)
+  if (!is.null(w)) {
+    w_main <- as.matrix(w)
+  } else if (!is.null(x)) {
+    w_main <- as.matrix(x)
+  } else {
+    w_main <- matrix(1, n, 1)
+  }
+
+  if (ncol(w_main) != q)
+    stop("w in validation (", q, " cols) does not match w in regression (",
+         ncol(w_main), " cols).", call. = FALSE)
+
+  if (is.null(eta)) {
+    fit_rho <- stats::glm.fit(w_val, z, family = stats::binomial())
+    if (!fit_rho$converged) warning("prevalence model did not converge", call. = FALSE)
+
+    fit_01 <- stats::glm.fit(w_val[idx0, , drop = FALSE], proxy[idx0], family = stats::binomial())
+    if (!fit_01$converged) warning("misclassification model p01 did not converge", call. = FALSE)
+
+    fit_10 <- stats::glm.fit(w_val[idx1, , drop = FALSE], 1L - proxy[idx1], family = stats::binomial())
+    if (!fit_10$converged) warning("misclassification model p10 did not converge", call. = FALSE)
+
+    eta_rho <- unname(stats::coef(fit_rho))
+    eta_01  <- unname(stats::coef(fit_01))
+    eta_10  <- unname(stats::coef(fit_10))
+    eta <- list(rho = eta_rho, p01 = eta_01, p10 = eta_10)
+  } else {
+    eta <- .mcglm_normalize_eta(eta, q)
+    eta_rho <- eta$rho
+    eta_01  <- eta$p01
+    eta_10  <- eta$p10
+  }
+
+  rho_val <- as.numeric(stats::plogis(w_val %*% eta_rho))
+  p01_val <- as.numeric(stats::plogis(w_val %*% eta_01))
+  p10_val <- as.numeric(stats::plogis(w_val %*% eta_10))
+
+  v_rho_val <- rho_val * (1 - rho_val)
+  v_01_val  <- p01_val * (1 - p01_val)
+  v_10_val  <- p10_val * (1 - p10_val)
+
+  H_rho <- crossprod(w_val * v_rho_val, w_val) / nv
+  H_01  <- crossprod(w_val * ((1 - z) * v_01_val), w_val) / nv
+  H_10  <- crossprod(w_val * (z * v_10_val), w_val) / nv
+
+  s_rho <- (w_val * (z - rho_val)) %*% solve(H_rho)
+  s_01  <- (w_val * ((1 - z) * (proxy - p01_val))) %*% solve(H_01)
+  s_10  <- (w_val * (z * (1 - proxy - p10_val))) %*% solve(H_10)
+
+  s_mat <- cbind(s_rho, s_01, s_10)
+
+  rho_main <- as.numeric(stats::plogis(w_main %*% eta_rho))
+  p01_main <- as.numeric(stats::plogis(w_main %*% eta_01))
+  p10_main <- as.numeric(stats::plogis(w_main %*% eta_10))
+
+  c1_main <- p01_main * (1 - rho_main)
+  c2_main <- c1_main - p10_main * rho_main
+
+  list(
+    type = if (is.null(index)) "external" else "internal",
+    n = nv,
+    index = index,
+    regressed = TRUE,
+    eta = eta,
+    w = w_main,
+    w_val = w_val,
+    s = s_mat,
+    c1 = c1_main,
+    c2 = c2_main,
+    rho = rho_main,
+    p01 = p01_main,
+    p10 = p10_main
+  )
 }
 
 # Equations Sigmahat-cs-external/internal and D-multicategory-explicit in
-# GLM bias correction.tex. All quantities here are on the sqrt(n) scale;
+# GLM bias correction.tex and Estimated probability corrected score.txt.
+# All quantities here are on the sqrt(n) scale;
 # the existing sandwich callers divide the resulting covariance by n.
 .mcglm_cs_validation_meat <- function(S, phi_mat, psi, x, K, mu_fun,
                                        validation) {
   n <- nrow(x)
   nv <- validation$n
+
+  if (isTRUE(validation$regressed)) {
+    w <- validation$w
+    q <- ncol(w)
+    p <- length(psi)
+
+    gamma <- psi[1L]
+    alpha <- psi[-1L]
+    eta0 <- as.numeric(x %*% alpha)
+    delta <- mu_fun(gamma + eta0) - mu_fun(eta0)
+
+    rho <- validation$rho
+    p01 <- validation$p01
+    p10 <- validation$p10
+
+    v_rho <- rho * (1 - rho)
+    v_01  <- p01 * (1 - p01)
+    v_10  <- p10 * (1 - p10)
+
+    D_rho <- matrix(0, p, q)
+    D_rho[1L, ] <- -colMeans(delta * p01 * v_rho * w)
+    D_rho[-1L, ] <- -crossprod(x * (delta * (p01 + p10) * v_rho), w) / n
+
+    D_01 <- matrix(0, p, q)
+    D_01[1L, ] <- colMeans(delta * (1 - rho) * v_01 * w)
+    D_01[-1L, ] <- crossprod(x * (delta * (1 - rho) * v_01), w) / n
+
+    D_10 <- matrix(0, p, q)
+    D_10[1L, ] <- 0
+    D_10[-1L, ] <- -crossprod(x * (delta * rho * v_10), w) / n
+
+    D_mat <- cbind(D_rho, D_01, D_10)
+
+    U <- validation$s %*% t(D_mat)
+
+    S <- S + (n / nv) * crossprod(U) / nv
+    if (!is.null(validation$index)) {
+      phi_v <- phi_mat[validation$index, , drop = FALSE]
+      phi_v <- sweep(phi_v, 2, colMeans(phi_v))
+      cross <- crossprod(phi_v, U) / nv
+      S <- S + cross + t(cross)
+    }
+    return(S)
+  }
+
   s <- K - 1L
   gamma <- c(0, psi[seq_len(s)])
   eta <- as.numeric(x %*% psi[-seq_len(s)])

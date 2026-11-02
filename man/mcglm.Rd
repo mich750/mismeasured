@@ -16,6 +16,8 @@ mcglm(
   K = NULL,
   c1 = NULL,
   c2 = NULL,
+  eta = NULL,
+  w = NULL,
   iterate = FALSE,
   jacobian = c("analytical", "numerical"),
   fix_omega = FALSE,
@@ -85,6 +87,16 @@ from \code{p01} and \code{pi_z} when \code{NULL}.}
 use). Computed from \code{p01}, \code{p10} and \code{pi_z} when
 \code{NULL}.}
 
+\item{eta}{Optional regressed misclassification/prevalence parameters
+\eqn{\hat\eta = (\hat\eta_\rho^\top, \hat\eta_{01}^\top, \hat\eta_{10}^\top)^\top}
+for binary misclassification. Either a named list with components
+\code{rho}, \code{p01}, \code{p10} (each a coefficient vector or fitted
+\code{glm} object), or a numeric vector of length \eqn{3 \times \text{ncol}(w)}.}
+
+\item{w}{Optional covariate matrix (or one-sided formula) for the
+misclassification and prevalence models \eqn{\expit(w^\top \eta)}.
+Defaults to the regression covariates \eqn{x}.}
+
 \item{iterate}{Logical. If \code{TRUE}, iterate the BCA/BCM updates
 to convergence (the iterated BCM solves the corrected score
 equation; iterated BCA performs Newton steps on the additive
@@ -111,22 +123,6 @@ of \eqn{\hat m(\hat\psi)} (joint score-and-drift sandwich); if
 
 \item{weights}{Optional positive frequency weights of length \eqn{n}.}
 
-\item{validation}{Optional list describing the sample used to estimate the
-probabilities for \code{method = "cs"}. For independent external
-validation use \code{list(z = true_codes, z_hat = proxy_codes)}. For an
-internal simple random subsample use
-\code{list(z = true_codes, index = regression_row_numbers)}; proxy codes
-are taken from those rows, which remain in the regression. Codes must be
-numeric integers in \code{0, ..., K-1}, in the model's category order.
-Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10}, or
-\code{c1/c2}) computed from these same validation observations using
-empirical proportions. This argument changes only the CS covariance,
-adding validation uncertainty and, for internal validation, the overlap
-covariance. Requires unweighted observations (or all weights equal to
-one) and every true category present in validation. With \code{NULL},
-the existing variance conditional on the supplied probabilities is used,
-including when \code{pi_z} is inferred from proxy frequencies.}
-
 \item{J}{Number of response categories (multinomial family only;
 auto-detected).}
 
@@ -145,6 +141,22 @@ pooled nonbaseline variance.}
 \item{x}{Covariate matrix \eqn{[x_1, \dots, x_n]^\top} of dimension
 \eqn{n \times r}; should include an intercept column when one is
 desired (matrix interface only).}
+
+\item{validation}{Optional list describing the sample used to estimate the
+probabilities for \code{method = "cs"}. For independent external
+validation use \code{list(z = true_codes, z_hat = proxy_codes)}. For an
+internal simple random subsample use
+\code{list(z = true_codes, index = regression_row_numbers)}; proxy codes
+are taken from those rows, which remain in the regression. Codes must be
+numeric integers in \code{0, ..., K-1}, in the model's category order.
+Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10}, or
+\code{c1/c2}) computed from these same validation observations using
+empirical proportions. This argument changes only the CS covariance,
+adding validation uncertainty and, for internal validation, the overlap
+covariance. Requires unweighted observations (or all weights equal to
+one) and every true category present in validation. With \code{NULL},
+the existing variance conditional on the supplied probabilities is used,
+including when \code{pi_z} is inferred from proxy frequencies.}
 }
 \value{
 An object of class \code{"mcglm"} with components:

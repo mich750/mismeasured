@@ -136,6 +136,14 @@
 #'   when using the formula interface.
 #' @param K Number of latent categories. Auto-detected from \code{Pi}
 #'   or, failing that, from the levels of \code{z_hat}.
+#' @param eta Optional regressed misclassification/prevalence parameters
+#'   \eqn{\hat\eta = (\hat\eta_\rho^\top, \hat\eta_{01}^\top, \hat\eta_{10}^\top)^\top}
+#'   for binary misclassification. Either a named list with components
+#'   \code{rho}, \code{p01}, \code{p10} (each a coefficient vector or fitted
+#'   \code{glm} object), or a numeric vector of length \eqn{3 \times \text{ncol}(w)}.
+#' @param w Optional covariate matrix (or one-sided formula) for the
+#'   misclassification and prevalence models \eqn{\expit(w^\top \eta)}.
+#'   Defaults to the regression covariates \eqn{x}.
 #' @param c1 Pre-computed misclassification constant
 #'   \eqn{c_1 = p_{01}(1 - \pi)} (binary case, advanced use). Computed
 #'   from \code{p01} and \code{pi_z} when \code{NULL}.
@@ -305,7 +313,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
                   method = c("naive", "bca", "bcm", "cs"),
                   p01 = NULL, p10 = NULL, pi_z = NULL,
                   Pi = NULL, K = NULL,
-                  c1 = NULL, c2 = NULL,
+                  c1 = NULL, c2 = NULL, eta = NULL, w = NULL,
                   iterate = FALSE,
                   jacobian = c("analytical", "numerical"),
                   fix_omega = FALSE,
@@ -319,6 +327,17 @@ mcglm <- function(formula, data = NULL, family = "poisson",
   cl <- match.call()
   jacobian <- match.arg(jacobian)
   formula_obj <- NULL
+
+  # Process w if supplied as formula
+  if (!is.null(w)) {
+    if (inherits(w, "formula")) {
+      w <- stats::model.matrix(w, data)
+    } else if (is.character(w)) {
+      w <- stats::model.matrix(stats::as.formula(paste("~", paste(w, collapse = " + "))), data)
+    } else if (is.data.frame(w)) {
+      w <- as.matrix(w)
+    }
+  }
 
   # --- Dispatch: formula vs matrix interface ---
   if (inherits(formula, "formula")) {
@@ -365,8 +384,8 @@ mcglm <- function(formula, data = NULL, family = "poisson",
   for (nm in c("c1", "c2")) {
     value <- get(nm)
     if (!is.null(value) &&
-        (!is.numeric(value) || length(value) != 1L || !is.finite(value)))
-      stop(nm, " must be one finite numeric value.", call. = FALSE)
+        (!is.numeric(value) || any(!is.finite(value)) || (length(value) != 1L && !is.null(data) && length(value) != nrow(data))))
+      stop(nm, " must be one finite numeric value or a vector of length n.", call. = FALSE)
   }
 
   # --- Derive p01/p10 from 2x2 Pi ---
@@ -390,7 +409,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
   # --- Core fitting ---
   out <- .mcglm_fit(y = y, z_hat = z_hat, x = x, family = family,
                     method = method, p01 = p01, p10 = p10, pi_z = pi_z,
-                    Pi = Pi, K = K, c1 = c1, c2 = c2, iterate = iterate,
+                    Pi = Pi, K = K, c1 = c1, c2 = c2, eta = eta, w = w, iterate = iterate,
                     jacobian = jacobian,
                     fix_omega = fix_omega,
                     vcov_corrected = vcov_corrected,
@@ -540,7 +559,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
                        method = c("naive", "bca", "bcm", "cs"),
                        p01 = NULL, p10 = NULL, pi_z = NULL,
                        Pi = NULL, K = NULL,
-                       c1 = NULL, c2 = NULL,
+                       c1 = NULL, c2 = NULL, eta = NULL, w = NULL,
                        iterate = FALSE,
                        jacobian = c("analytical", "numerical"),
                        fix_omega = FALSE,
@@ -642,6 +661,45 @@ mcglm <- function(formula, data = NULL, family = "poisson",
          "level coding of z_hat.", call. = FALSE)
   }
 
+  # Check c1 and c2
+  for (nm in c("c1", "c2")) {
+    value <- get(nm)
+    if (!is.null(value) &&
+        (!is.numeric(value) || any(!is.finite(value)) || (length(value) != 1L && length(value) != n)))
+      stop(nm, " must be one finite numeric value or a vector of length n.", call. = FALSE)
+  }
+
+  # If eta is supplied, compute c1 and c2 from eta and w
+  if (!is.null(eta)) {
+    w_use <- if (!is.null(w)) as.matrix(w) else x
+    c_pack <- .mcglm_compute_c_bin(eta, w_use)
+    c1   <- c_pack$c1
+    c2   <- c_pack$c2
+    p01  <- c_pack$p01
+    p10  <- c_pack$p10
+    pi_z <- c_pack$rho
+    eta  <- c_pack$eta
+    w    <- w_use
+  }
+
+  # Validation affects CS covariance (and estimates eta if needed)
+  if (!is.null(validation)) {
+    if (!any(c("cs", "cs_akn") %in% method))
+      stop("validation requires method = 'cs' or 'cs_akn'.", call. = FALSE)
+    validation <- .mcglm_prepare_cs_validation(validation, z_hat, K, wt,
+                                                c1, c2, Pi, pi_z,
+                                                x = x, w = w, eta = eta)
+    if (isTRUE(validation$regressed)) {
+      c1   <- validation$c1
+      c2   <- validation$c2
+      p01  <- validation$p01
+      p10  <- validation$p10
+      pi_z <- validation$rho
+      eta  <- validation$eta
+      w    <- validation$w
+    }
+  }
+
   # --- validate misclassification parameters ---
   needs_correction <- any(method %in% c("bca", "bcm", "cs", "cs_akn", "onestep"))
   needs_cs_akn     <- "cs_akn" %in% method
@@ -657,7 +715,8 @@ mcglm <- function(formula, data = NULL, family = "poisson",
         if (is.null(Pi)) {
           if (is.null(p01) || is.null(p10))
             stop("For binary cs_akn, supply Pi or both p01 and p10.")
-          Pi <- matrix(c(1 - p01, p01, p10, 1 - p10), 2L, 2L)
+          if (length(p01) == 1L && length(p10) == 1L)
+            Pi <- matrix(c(1 - p01, p01, p10, 1 - p10), 2L, 2L)
         }
       }
     } else {
@@ -681,14 +740,6 @@ mcglm <- function(formula, data = NULL, family = "poisson",
     }
   }
 
-  # Validation affects only the CS covariance; probabilities and point
-  # estimates continue to use the existing interface and fitting code.
-  if (!is.null(validation)) {
-    if (!"cs" %in% method)
-      stop("validation requires method = 'cs'.", call. = FALSE)
-    validation <- .mcglm_prepare_cs_validation(validation, z_hat, K, wt,
-                                                c1, c2, Pi, pi_z)
-  }
 
   # --- build xi_hat once ---
   if (!is_multinomial) {
@@ -698,8 +749,16 @@ mcglm <- function(formula, data = NULL, family = "poisson",
   # --- AKN98 unbiased surrogate (built once, reused for fit + variance) ---
   x_akn <- NULL
   if (needs_cs_akn) {
-    Q_pack <- .akn_build_Q(Pi, K)
-    x_akn  <- .akn_unbiased_surrogate(z_hat, Q_pack$Q_inv, Q_pack$p0, K)
+    if (is_binary && (!is.null(p01) && !is.null(p10))) {
+      Delta <- 1 - p01 - p10
+      if (any(abs(Delta) < 0.001))
+        warning("cs_akn: 1 - p01 - p10 is near zero (< 0.001); clamping applied for numerical stability.", call. = FALSE)
+      Delta <- ifelse(abs(Delta) < 0.001, ifelse(Delta >= 0, 0.001, -0.001), Delta)
+      x_akn <- as.matrix((z_hat - p01) / Delta)
+    } else {
+      Q_pack <- .akn_build_Q(Pi, K)
+      x_akn  <- .akn_unbiased_surrogate(z_hat, Q_pack$Q_inv, Q_pack$p0, K)
+    }
   }
 
   # --- fit ---
@@ -872,7 +931,9 @@ mcglm <- function(formula, data = NULL, family = "poisson",
                                  Pi, pi_z, wt = wt,
                                  jacobian = jacobian, validation = validation)
         } else if (nm == "cs_akn") {
-          .mcglm_vcov_cs_akn(psi_nm, y, x_akn, x, K, family, wt = wt)
+          .mcglm_vcov_cs_akn(psi_nm, y, x_akn, x, K, family, wt = wt,
+                             validation = validation, w = w,
+                             p01 = p01, p10 = p10, z_hat = z_hat)
         } else if (nm == "onestep") {
           onestep_vcov
         },
@@ -913,8 +974,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
     z_hat        = z_hat,
     x            = x,
     is_multinomial = is_multinomial,
-    misclass     = list(c1 = c1, c2 = c2, p01 = p01, p10 = p10,
-                        pi_z = pi_z, Pi = Pi)
+    misclass     = list(c1 = c1, c2 = c2, p01 = p01, p10 = p10, pi_z = pi_z, Pi = Pi, eta = eta, w = w)
   )
   if (!is_multinomial) out$xi_hat <- xi_hat
   if (!is.null(validation)) out$validation <- validation

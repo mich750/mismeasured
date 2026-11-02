@@ -198,3 +198,135 @@ test_that("cs_akn and cs converge to the same point as n grows (Poisson K=2)", {
   expect_true(max(abs(coef(fit, method = "cs") -
                       coef(fit, method = "cs_akn"))) < 0.01)
 })
+
+# ---- Regressed eta and validation tests (Yi et al. 2018 style) ----
+
+test_that("cs_akn works with regressed eta and validation across families", {
+  for (fam in c("poisson", "gaussian", "binomial")) {
+    for (type in c("internal", "external")) {
+      set.seed(101)
+      n <- 600
+      nv <- 200
+      w <- cbind(1, rnorm(n))
+      x <- w
+      eta_rho <- c(0.2, 0.5)
+      eta_01  <- c(-1.4, 0.6)
+      eta_10  <- c(-1.3, -0.4)
+      rho <- plogis(as.numeric(w %*% eta_rho))
+      z   <- rbinom(n, 1, rho)
+      p01 <- plogis(as.numeric(w %*% eta_01))
+      p10 <- plogis(as.numeric(w %*% eta_10))
+      zh  <- ifelse(z == 0L, rbinom(n, 1, p01), 1L - rbinom(n, 1, p10))
+      psi_true <- c(0.7, -0.4, 0.5)
+      lin_pred <- psi_true[1] * z + psi_true[2] + psi_true[3] * x[, 2]
+      y <- switch(fam,
+                  poisson  = rpois(n, exp(lin_pred)),
+                  binomial = rbinom(n, 1, plogis(lin_pred)),
+                  gaussian = rnorm(n, lin_pred, 0.5))
+      if (type == "internal") {
+        idx <- sample.int(n, nv)
+        v <- list(z = z[idx], index = idx)
+      } else {
+        w_v <- cbind(1, rnorm(nv))
+        rho_v <- plogis(as.numeric(w_v %*% eta_rho))
+        z_v <- rbinom(nv, 1, rho_v)
+        p01_v <- plogis(as.numeric(w_v %*% eta_01))
+        p10_v <- plogis(as.numeric(w_v %*% eta_10))
+        zh_v <- ifelse(z_v == 0L, rbinom(nv, 1, p01_v), 1L - rbinom(nv, 1, p10_v))
+        v <- list(z = z_v, z_hat = zh_v, w = w_v)
+      }
+      fit <- mcglm(y, z_hat = zh, x = x, family = fam, method = "cs_akn", validation = v)
+      expect_s3_class(fit, "mcglm")
+      cf <- coef(fit, method = "cs_akn")
+      expect_equal(length(cf), 3L)
+      expect_true(all(is.finite(cf)))
+      V <- vcov(fit, method = "cs_akn")
+      expect_true(all(is.finite(V)))
+      expect_true(all(diag(V) > 0))
+    }
+  }
+})
+
+test_that("cs_akn internal validation variance matches stacked estimating equation sandwich", {
+  set.seed(42)
+  n <- 800
+  nv <- 300
+  w <- cbind(1, rnorm(n))
+  x <- w
+  q <- ncol(w)
+  eta_rho <- c(0.2, 0.6)
+  eta_01  <- c(-1.5, 0.8)
+  eta_10  <- c(-1.2, -0.6)
+  rho <- plogis(as.numeric(w %*% eta_rho))
+  z   <- rbinom(n, 1, rho)
+  p01 <- plogis(as.numeric(w %*% eta_01))
+  p10 <- plogis(as.numeric(w %*% eta_10))
+  zh  <- ifelse(z == 0L, rbinom(n, 1, p01), 1L - rbinom(n, 1, p10))
+  psi_true <- c(0.8, -0.5, 0.7)
+  lin_pred <- psi_true[1] * z + psi_true[2] + psi_true[3] * x[, 2]
+  y <- rpois(n, exp(lin_pred))
+  v_idx <- sample.int(n, nv)
+  v <- list(z = z[v_idx], index = v_idx)
+  fit <- mcglm(y, z_hat = zh, x = x, family = "poisson", method = "cs_akn", validation = v)
+  V_package <- vcov(fit, method = "cs_akn")
+
+  # Compute stacked sandwich manually
+  psi_hat <- coef(fit, method = "cs_akn")
+  p01_m <- fit$misclass$p01
+  p10_m <- fit$misclass$p10
+  x_akn_m <- as.matrix((zh - p01_m) / (1 - p01_m - p10_m))
+  Phi <- mismeasured:::.akn_phi(psi_hat, y, x_akn_m, x, 2L, poisson())
+  I_akn <- mismeasured:::.akn_information(psi_hat, y, x_akn_m, x, 2L, poisson())
+  Ji <- solve(-I_akn)
+  p <- length(psi_hat)
+  gamma <- psi_hat[1]
+  alpha <- psi_hat[-1]
+  alpha_lin <- as.numeric(x %*% alpha)
+  mu1 <- exp(gamma + alpha_lin)
+  mu0 <- exp(alpha_lin)
+  delta <- mu1 - mu0
+  Delta_m <- 1 - p01_m - p10_m
+  v01_m <- p01_m * (1 - p01_m)
+  v10_m <- p10_m * (1 - p10_m)
+  D_rho <- matrix(0, p, q)
+  weight_01 <- (1 - p10_m - zh) / (Delta_m^2) * v01_m
+  D_01 <- rbind(-colMeans((y - mu1) * weight_01 * w),
+                crossprod(x * (delta * weight_01), w) / n)
+  weight_10 <- (zh - p01_m) / (Delta_m^2) * v10_m
+  D_10 <- rbind(colMeans((y - mu1) * weight_10 * w),
+                -crossprod(x * (delta * weight_10), w) / n)
+  D_mat <- cbind(D_rho, D_01, D_10)
+  s_mat <- fit$validation$s
+  stacked_ef <- matrix(0, n, p + 3 * q)
+  stacked_ef[, 1:p] <- Phi
+  stacked_ef[v_idx, (p + 1):(p + 3 * q)] <- (n / nv) * s_mat
+  top_jacobian <- cbind(Ji, Ji %*% D_mat)
+  V_stacked <- top_jacobian %*% crossprod(stacked_ef) %*% t(top_jacobian) / n^2
+  expect_equal(unname(V_package), V_stacked, tolerance = 1e-7)
+})
+
+test_that("cs_akn formula and mclm interfaces work with validation", {
+  set.seed(55)
+  n <- 500
+  nv <- 200
+  w <- cbind(1, rnorm(n))
+  x <- w
+  eta_rho <- c(0.2, 0.5)
+  eta_01  <- c(-1.4, 0.6)
+  eta_10  <- c(-1.3, -0.4)
+  rho <- plogis(as.numeric(w %*% eta_rho))
+  z   <- rbinom(n, 1, rho)
+  p01 <- plogis(as.numeric(w %*% eta_01))
+  p10 <- plogis(as.numeric(w %*% eta_10))
+  zh  <- ifelse(z == 0L, rbinom(n, 1, p01), 1L - rbinom(n, 1, p10))
+  y <- rpois(n, exp(0.7 * z - 0.4 + 0.5 * x[, 2]))
+  idx <- sample.int(n, nv)
+  v <- list(z = z[idx], index = idx)
+  df <- data.frame(y = y, z = factor(zh), x1 = x[, 2])
+  fit_form <- mcglm(y ~ mc(z) + x1, data = df, family = "poisson", method = "cs_akn", validation = v)
+  fit_mat  <- mcglm(y, z_hat = zh, x = x, family = "poisson", method = "cs_akn", validation = v)
+  expect_equal(unname(coef(fit_form, method = "cs_akn")), unname(coef(fit_mat, method = "cs_akn")), tolerance = 1e-7)
+  expect_equal(unname(vcov(fit_form, method = "cs_akn")), unname(vcov(fit_mat, method = "cs_akn")), tolerance = 1e-7)
+  fit_lm <- mclm(y ~ mc(z) + x1, data = df, method = "cs_akn", validation = v)
+  expect_equal(length(coef(fit_lm, method = "cs_akn")), 3L)
+})

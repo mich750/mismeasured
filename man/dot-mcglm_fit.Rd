@@ -17,6 +17,8 @@
   K = NULL,
   c1 = NULL,
   c2 = NULL,
+  eta = NULL,
+  w = NULL,
   iterate = FALSE,
   jacobian = c("analytical", "numerical"),
   fix_omega = FALSE,

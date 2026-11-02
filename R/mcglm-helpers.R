@@ -129,18 +129,82 @@
   M <- matrix(0, p, p)
 
   if (is.null(wt)) {
-    M[1, 1]    <- -c1 * mean(mu_dot1)
-    M[1, 2:p]  <- -c1 * colMeans(d_mu_dot * x)
-    M[2:p, 1]    <- -c2 * colMeans(mu_dot1 * x)
-    M[2:p, 2:p]  <- -c2 * crossprod(d_mu_dot * x, x) / n
+    M[1, 1]    <- -mean(c1 * mu_dot1)
+    M[1, 2:p]  <- -colMeans(c1 * d_mu_dot * x)
+    M[2:p, 1]    <- -colMeans(c2 * mu_dot1 * x)
+    M[2:p, 2:p]  <- -crossprod(c2 * d_mu_dot * x, x) / n
   } else {
-    M[1, 1]    <- -c1 * sum(wt * mu_dot1) / N
-    M[1, 2:p]  <- -c1 * colSums(wt * d_mu_dot * x) / N
-    M[2:p, 1]    <- -c2 * colSums(wt * mu_dot1 * x) / N
-    M[2:p, 2:p]  <- -c2 * crossprod(x * (wt * d_mu_dot), x) / N
+    M[1, 1]    <- -sum(wt * c1 * mu_dot1) / N
+    M[1, 2:p]  <- -colSums(wt * c1 * d_mu_dot * x) / N
+    M[2:p, 1]    <- -colSums(wt * c2 * mu_dot1 * x) / N
+    M[2:p, 2:p]  <- -crossprod(x * (wt * c2 * d_mu_dot), x) / N
   }
 
   M
+}
+
+#' Normalize eta argument into a list of three length-q vectors
+#' @keywords internal
+.mcglm_normalize_eta <- function(eta, q) {
+  extract_coef <- function(val, name) {
+    if (inherits(val, "glm") || inherits(val, "lm"))
+      val <- stats::coef(val)
+    if (!is.numeric(val) || any(!is.finite(val)))
+      stop("eta$", name, " must be numeric and finite.", call. = FALSE)
+    val <- unname(as.numeric(val))
+    if (length(val) != q)
+      stop("eta$", name, " has length ", length(val), ", but w has ", q,
+           " columns.", call. = FALSE)
+    val
+  }
+  if (is.list(eta)) {
+    if (!all(c("rho", "p01", "p10") %in% names(eta)))
+      stop("When eta is a list, it must contain 'rho', 'p01', and 'p10'.",
+           call. = FALSE)
+    list(
+      rho = extract_coef(eta$rho, "rho"),
+      p01 = extract_coef(eta$p01, "p01"),
+      p10 = extract_coef(eta$p10, "p10")
+    )
+  } else if (is.numeric(eta)) {
+    if (length(eta) != 3L * q || any(!is.finite(eta)))
+      stop("When eta is a numeric vector, it must have length 3 * ncol(w) = ",
+           3L * q, ".", call. = FALSE)
+    eta <- unname(as.numeric(eta))
+    list(
+      rho = eta[seq_len(q)],
+      p01 = eta[q + seq_len(q)],
+      p10 = eta[2L * q + seq_len(q)]
+    )
+  } else {
+    stop("eta must be a named list with 'rho', 'p01', 'p10' or a numeric vector.",
+         call. = FALSE)
+  }
+}
+
+#' Compute c1 and c2 from regressed parameters eta and covariates w
+#'
+#' Evaluates rho(x; eta_rho) = expit(w' eta_rho),
+#' p01(x; eta_01) = expit(w' eta_01), and
+#' p10(x; eta_10) = expit(w' eta_10), and computes
+#' c1(x) = p01(x) * (1 - rho(x)) and
+#' c2(x) = c1(x) - p10(x) * rho(x).
+#'
+#' @param eta Named list with elements 'rho', 'p01', 'p10' or numeric vector
+#'   of length 3 * ncol(w).
+#' @param w Covariate matrix (n x q).
+#' @return List with components c1, c2, rho, p01, p10, eta.
+#' @keywords internal
+.mcglm_compute_c_bin <- function(eta, w) {
+  w <- as.matrix(w)
+  q <- ncol(w)
+  eta_norm <- .mcglm_normalize_eta(eta, q)
+  rho <- as.numeric(stats::plogis(w %*% eta_norm$rho))
+  p01 <- as.numeric(stats::plogis(w %*% eta_norm$p01))
+  p10 <- as.numeric(stats::plogis(w %*% eta_norm$p10))
+  c1 <- p01 * (1 - rho)
+  c2 <- c1 - p10 * rho
+  list(c1 = c1, c2 = c2, rho = rho, p01 = p01, p10 = p10, eta = eta_norm)
 }
 
 # ---- Multicategory misclassification helpers ----

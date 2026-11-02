@@ -33,7 +33,7 @@ mclm <- function(formula, data = NULL,
                  method = c("naive", "bca", "bcm", "cs"),
                  p01 = NULL, p10 = NULL, pi_z = NULL,
                  Pi = NULL, K = NULL,
-                 c1 = NULL, c2 = NULL,
+                 c1 = NULL, c2 = NULL, eta = NULL, w = NULL,
                  iterate = FALSE,
                  jacobian = c("analytical", "numerical"),
                  fix_omega = FALSE,
@@ -41,7 +41,7 @@ mclm <- function(formula, data = NULL,
                  weights = NULL,
                  J = NULL,
                  homoskedastic = TRUE,
-                 optim_control = list(),
+                 optim_control = list(), validation = NULL,
                  z_hat = NULL, x = NULL) {
 
   cl <- match.call()
