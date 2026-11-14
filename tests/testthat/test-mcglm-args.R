@@ -40,10 +40,10 @@ test_that("iterate=TRUE for K=3 BCA/BCM converges and matches one-shot when stab
 })
 
 # ==========================================================================
-# Direct c1 / c2 path
+# Misclassification parameters and rejection of direct c1 / c2
 # ==========================================================================
 
-test_that("c1/c2 supplied directly match values derived from p01/p10/pi_z", {
+test_that("c1 and c2 are computed internally from p01/p10/pi_z and direct inputs are rejected", {
   set.seed(92)
   n <- 500
   x <- cbind(1, rnorm(n))
@@ -54,26 +54,27 @@ test_that("c1/c2 supplied directly match values derived from p01/p10/pi_z", {
   z_hat[z == 1] <- 1 - rbinom(sum(z == 1), 1, 0.15)
 
   p01 <- 0.10; p10 <- 0.15; pi_z <- 0.4
-  c1 <- p01 * (1 - pi_z)
-  c2 <- p01 * (1 - pi_z) - p10 * pi_z
+  c1_expected <- p01 * (1 - pi_z)
+  c2_expected <- p01 * (1 - pi_z) - p10 * pi_z
 
   fit_pi <- mcglm(y, z_hat = z_hat, x = x, family = "poisson",
                   method = c("bca", "bcm", "cs"),
                   p01 = p01, p10 = p10, pi_z = pi_z)
-  fit_c  <- mcglm(y, z_hat = z_hat, x = x, family = "poisson",
-                  method = c("bca", "bcm", "cs"),
-                  c1 = c1, c2 = c2)
-  # Variance for cs / corrected BCA/BCM should also be available with the
-  # c1/c2-only path (no warning, finite SEs).
-  expect_true(all(is.finite(vcov(fit_c, method = "cs"))))
 
-  for (m in c("bca", "bcm", "cs")) {
-    expect_equal(fit_pi$coefficients[[m]], fit_c$coefficients[[m]],
-                 tolerance = 1e-10, info = m)
-  }
+  expect_equal(fit_pi$misclass$c1, c1_expected)
+  expect_equal(fit_pi$misclass$c2, c2_expected)
+  expect_true(all(is.finite(vcov(fit_pi, method = "cs"))))
+
+  # Supplying c1 or c2 directly is rejected as an unused argument
+  expect_error(mcglm(y, z_hat = z_hat, x = x, family = "poisson",
+                     p01 = p01, p10 = p10, pi_z = pi_z, c1 = c1_expected),
+               "unused argument")
+  expect_error(mcglm(y, z_hat = z_hat, x = x, family = "poisson",
+                     p01 = p01, p10 = p10, pi_z = pi_z, c2 = c2_expected),
+               "unused argument")
 })
 
-test_that("vcov_corrected works on the c1/c2-only path (binary)", {
+test_that("vcov_corrected works with p01/p10/pi_z (binary)", {
   set.seed(99)
   n <- 800
   x <- cbind(1, rnorm(n))
@@ -83,11 +84,8 @@ test_that("vcov_corrected works on the c1/c2-only path (binary)", {
   z_hat[z == 0] <- rbinom(sum(z == 0), 1, 0.10)
   z_hat[z == 1] <- 1 - rbinom(sum(z == 1), 1, 0.15)
 
-  c1 <- 0.10 * (1 - 0.4)
-  c2 <- 0.10 * (1 - 0.4) - 0.15 * 0.4
-
   fit <- mcglm(y, z_hat = z_hat, x = x, family = "poisson",
-               method = "bcm", c1 = c1, c2 = c2,
+               method = "bcm", p01 = 0.10, p10 = 0.15, pi_z = 0.4,
                vcov_corrected = TRUE)
   V <- vcov(fit, method = "bcm")
   expect_true(all(is.finite(V)))
@@ -217,7 +215,7 @@ test_that("mcglm rejects invalid misclassification parameters", {
   expect_error(mcglm(y, z_hat = z, x = x, method = "cs",
                      p01 = 0.1, p10 = 0.1, pi_z = c(0.4, 0.6)), "length 1")
   expect_error(mcglm(y, z_hat = z, x = x, method = "cs",
-                     c1 = Inf, c2 = 0), "c1")
+                     c1 = Inf, c2 = 0), "unused argument")
   expect_error(mcglm(y, z_hat = z, x = x, method = "naive", Pi = Pi,
                      weights = rep(Inf, n)), "finite positive")
 })

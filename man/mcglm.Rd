@@ -14,8 +14,6 @@ mcglm(
   pi_z = NULL,
   Pi = NULL,
   K = NULL,
-  c1 = NULL,
-  c2 = NULL,
   eta = NULL,
   w = NULL,
   iterate = FALSE,
@@ -77,15 +75,6 @@ when using the formula interface.}
 
 \item{K}{Number of latent categories. Auto-detected from \code{Pi}
 or, failing that, from the levels of \code{z_hat}.}
-
-\item{c1}{Pre-computed misclassification constant
-\eqn{c_1 = p_{01}(1 - \pi)} (binary case, advanced use). Computed
-from \code{p01} and \code{pi_z} when \code{NULL}.}
-
-\item{c2}{Pre-computed misclassification constant
-\eqn{c_2 = p_{01}(1 - \pi) - p_{10} \pi} (binary case, advanced
-use). Computed from \code{p01}, \code{p10} and \code{pi_z} when
-\code{NULL}.}
 
 \item{eta}{Optional regressed misclassification/prevalence parameters
 \eqn{\hat\eta = (\hat\eta_\rho^\top, \hat\eta_{01}^\top, \hat\eta_{10}^\top)^\top}
@@ -149,8 +138,8 @@ internal simple random subsample use
 \code{list(z = true_codes, index = regression_row_numbers)}; proxy codes
 are taken from those rows, which remain in the regression. Codes must be
 numeric integers in \code{0, ..., K-1}, in the model's category order.
-Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10}, or
-\code{c1/c2}) computed from these same validation observations using
+Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10/pi_z}) computed
+from these same validation observations using
 empirical proportions. This argument changes only the CS covariance,
 adding validation uncertainty and, for internal validation, the overlap
 covariance. Requires unweighted observations (or all weights equal to
@@ -264,7 +253,7 @@ to supply parameters for methods you are not fitting.
 \tabular{lll}{
   \strong{Method}    \tab \strong{Binary (K = 2)}                    \tab \strong{Multicategory (K > 2)} \cr
   \code{"naive"}    \tab \emph{none}                                 \tab \emph{none} \cr
-  \code{"bca"}, \code{"bcm"}, \code{"cs"} \tab \code{c1} and \code{c2}, or \code{p01}/\code{p10}/\code{pi_z}, or \code{Pi} \tab \code{Pi} and \code{pi_z} \cr
+  \code{"bca"}, \code{"bcm"}, \code{"cs"} \tab \code{p01}/\code{p10}/\code{pi_z}, or \code{Pi} (or \code{eta}, or \code{validation}) \tab \code{Pi} and \code{pi_z} \cr
   \code{"onestep"} (\code{fix_omega = FALSE}) \tab \emph{none} (mixture weights estimated) \tab \emph{none} \cr
   \code{"onestep"} (\code{fix_omega = TRUE})  \tab \code{p01}, \code{p10}, \code{pi_z} \tab \code{Pi}, \code{pi_z}
 }
@@ -276,12 +265,11 @@ to supply parameters for methods you are not fitting.
   \item If \code{Pi} and \code{z_hat} are available but \code{pi_z}
     is not, \code{pi_z} is estimated by Bayesian inversion of the
     observed proxy frequencies (\code{.mcglm_estimate_pi_z}).
-  \item If \code{p01}, \code{p10}, \code{pi_z} are available but
-    \code{c1}, \code{c2} are not, the latter are computed from the
-    formulas above.
+  \item From \code{p01}, \code{p10}, and \code{pi_z}, the drift parameters
+    \eqn{c_1 = p_{01}(1 - \pi)} and \eqn{c_2 = c_1 - p_{10}\pi} are computed
+    automatically.
 }
-Supplying \code{c1} and \code{c2} directly is an "advanced" path
-that bypasses these checks. The formula interface
+The formula interface
 (\code{y ~ mc(z, Pi) + ...}) extracts \code{Pi} automatically and is
 the recommended entry point.
 }

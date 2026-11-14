@@ -177,7 +177,7 @@ test_that("validation metadata rejects inconsistent probabilities and unsupporte
   expect_error(fit(args = wrong), "requires method")
 })
 
-test_that("formula, binary c1/c2, and multicategory numerical Jacobian interfaces work", {
+test_that("formula, binary p01/p10/pi_z, and multicategory numerical Jacobian interfaces work", {
   d <- .csv_fixture()
   a <- d$args
   df <- data.frame(y = a$formula, z = a$z_hat, x = a$x[, 2])
@@ -186,8 +186,10 @@ test_that("formula, binary c1/c2, and multicategory numerical Jacobian interface
   direct <- do.call(mcglm, c(a, list(validation = d$v)))
   expect_equal(unname(vcov(fitted, method = "cs")), unname(vcov(direct, method = "cs")))
   a$Pi <- a$pi_z <- NULL
-  a$c1 <- d$B[2, 1]
-  a$c2 <- d$B[2, 1] - d$B[1, 2]
+  pi_z_emp <- d$B[1, 2] + d$B[2, 2]
+  a$p01 <- d$B[2, 1] / (1 - pi_z_emp)
+  a$p10 <- d$B[1, 2] / pi_z_emp
+  a$pi_z <- pi_z_emp
   constants <- do.call(mcglm, c(a, list(validation = d$v)))
   expect_equal(vcov(constants, method = "cs"), vcov(direct, method = "cs"))
   d3 <- .csv_fixture(3L)
@@ -378,11 +380,12 @@ test_that("regressed eta with w = 1 matches constant probability formula", {
   fit_const_reg <- mcglm(d$y, z_hat = d$zh, x = cbind(1, d$x[, 2]), family = "poisson", method = "cs",
                          w = w_const, validation = v_const)
   B <- matrix(tabulate(d$zh[d$v$index] + 1L + 2L * d$v$z, nbins = 4), 2) / d$nv
-  c1_const <- B[2, 1]
-  c2_const <- B[2, 1] - B[1, 2]
+  pi_const <- B[1, 2] + B[2, 2]
+  p01_const <- B[2, 1] / (1 - pi_const)
+  p10_const <- B[1, 2] / pi_const
   v_old <- list(z = d$v$z, index = d$v$index)
   fit_const_old <- mcglm(d$y, z_hat = d$zh, x = cbind(1, d$x[, 2]), family = "poisson", method = "cs",
-                         c1 = c1_const, c2 = c2_const, validation = v_old)
+                         p01 = p01_const, p10 = p10_const, pi_z = pi_const, validation = v_old)
   expect_equal(vcov(fit_const_reg, method = "cs"), vcov(fit_const_old, method = "cs"), tolerance = 1e-8)
 })
 
@@ -449,25 +452,17 @@ test_that("mcglm handles w supplied as formula, character, and data.frame", {
   expect_true(all(is.finite(coef(fit_mclm_eta, method = "cs"))))
 })
 
-test_that("c1 and c2 validation checks catch invalid inputs", {
+test_that("c1 and c2 arguments are rejected as unused arguments", {
   d <- .cs_regressed_fixture(n = 100L, nv = 50L)
   df <- data.frame(y = d$y, z = factor(d$zh), x1 = d$x[, 2])
 
   # In formula interface
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = "bad"), "c1 must be one finite numeric value")
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = c(1, 2)), "c1 must be one finite numeric value")
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = Inf), "c1 must be one finite numeric value")
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = "bad"), "c2 must be one finite numeric value")
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = c(1, 2)), "c2 must be one finite numeric value")
-  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = NaN), "c2 must be one finite numeric value")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c1 = 0.1), "unused argument")
+  expect_error(mcglm(y ~ mc(z) + x1, data = df, c2 = 0.1), "unused argument")
 
   # In matrix interface (.mcglm_fit)
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = "bad"), "c1 must be one finite numeric value")
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = c(1, 2)), "c1 must be one finite numeric value")
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = Inf), "c1 must be one finite numeric value")
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = "bad"), "c2 must be one finite numeric value")
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = c(1, 2)), "c2 must be one finite numeric value")
-  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = NaN), "c2 must be one finite numeric value")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c1 = 0.1), "unused argument")
+  expect_error(mcglm(d$y, z_hat = d$zh, x = d$x, c2 = 0.1), "unused argument")
 })
 
 test_that("validation requires cs or cs_akn method", {

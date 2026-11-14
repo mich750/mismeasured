@@ -13,8 +13,6 @@ mclm(
   pi_z = NULL,
   Pi = NULL,
   K = NULL,
-  c1 = NULL,
-  c2 = NULL,
   eta = NULL,
   w = NULL,
   iterate = FALSE,
@@ -72,15 +70,6 @@ when using the formula interface.}
 \item{K}{Number of latent categories. Auto-detected from \code{Pi}
 or, failing that, from the levels of \code{z_hat}.}
 
-\item{c1}{Pre-computed misclassification constant
-\eqn{c_1 = p_{01}(1 - \pi)} (binary case, advanced use). Computed
-from \code{p01} and \code{pi_z} when \code{NULL}.}
-
-\item{c2}{Pre-computed misclassification constant
-\eqn{c_2 = p_{01}(1 - \pi) - p_{10} \pi} (binary case, advanced
-use). Computed from \code{p01}, \code{p10} and \code{pi_z} when
-\code{NULL}.}
-
 \item{eta}{Optional regressed misclassification/prevalence parameters
 \eqn{\hat\eta = (\hat\eta_\rho^\top, \hat\eta_{01}^\top, \hat\eta_{10}^\top)^\top}
 for binary misclassification. Either a named list with components
@@ -136,8 +125,8 @@ internal simple random subsample use
 \code{list(z = true_codes, index = regression_row_numbers)}; proxy codes
 are taken from those rows, which remain in the regression. Codes must be
 numeric integers in \code{0, ..., K-1}, in the model's category order.
-Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10}, or
-\code{c1/c2}) computed from these same validation observations using
+Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10/pi_z}) computed
+from these same validation observations using
 empirical proportions. This argument changes only the CS covariance,
 adding validation uncertainty and, for internal validation, the overlap
 covariance. Requires unweighted observations (or all weights equal to

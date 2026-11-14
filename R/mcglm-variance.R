@@ -345,7 +345,7 @@
     if (length(supplied) != length(expected) || any(!is.finite(supplied)) ||
         max(abs(supplied - expected)) > 1e-8)
       stop("CS probabilities must be empirical estimates from the supplied validation sample; ",
-           "supply pi_z explicitly (or c1/c2 for K=2).", call. = FALSE)
+           "supply pi_z explicitly (or p01/p10/pi_z for K=2).", call. = FALSE)
     return(list(b = b, cells = cells, index = index, n = nv, regressed = FALSE,
                 type = if (is.null(index)) "external" else "internal"))
   }

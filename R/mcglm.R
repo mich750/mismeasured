@@ -78,7 +78,7 @@
 #' \tabular{lll}{
 #'   \strong{Method}    \tab \strong{Binary (K = 2)}                    \tab \strong{Multicategory (K > 2)} \cr
 #'   \code{"naive"}    \tab \emph{none}                                 \tab \emph{none} \cr
-#'   \code{"bca"}, \code{"bcm"}, \code{"cs"} \tab \code{c1} and \code{c2}, or \code{p01}/\code{p10}/\code{pi_z}, or \code{Pi} \tab \code{Pi} and \code{pi_z} \cr
+#'   \code{"bca"}, \code{"bcm"}, \code{"cs"} \tab \code{p01}/\code{p10}/\code{pi_z}, or \code{Pi} (or \code{eta}, or \code{validation}) \tab \code{Pi} and \code{pi_z} \cr
 #'   \code{"onestep"} (\code{fix_omega = FALSE}) \tab \emph{none} (mixture weights estimated) \tab \emph{none} \cr
 #'   \code{"onestep"} (\code{fix_omega = TRUE})  \tab \code{p01}, \code{p10}, \code{pi_z} \tab \code{Pi}, \code{pi_z}
 #' }
@@ -90,12 +90,11 @@
 #'   \item If \code{Pi} and \code{z_hat} are available but \code{pi_z}
 #'     is not, \code{pi_z} is estimated by Bayesian inversion of the
 #'     observed proxy frequencies (\code{.mcglm_estimate_pi_z}).
-#'   \item If \code{p01}, \code{p10}, \code{pi_z} are available but
-#'     \code{c1}, \code{c2} are not, the latter are computed from the
-#'     formulas above.
+#'   \item From \code{p01}, \code{p10}, and \code{pi_z}, the drift parameters
+#'     \eqn{c_1 = p_{01}(1 - \pi)} and \eqn{c_2 = c_1 - p_{10}\pi} are computed
+#'     automatically.
 #' }
-#' Supplying \code{c1} and \code{c2} directly is an "advanced" path
-#' that bypasses these checks. The formula interface
+#' The formula interface
 #' (\code{y ~ mc(z, Pi) + ...}) extracts \code{Pi} automatically and is
 #' the recommended entry point.
 #'
@@ -144,13 +143,6 @@
 #' @param w Optional covariate matrix (or one-sided formula) for the
 #'   misclassification and prevalence models \eqn{\expit(w^\top \eta)}.
 #'   Defaults to the regression covariates \eqn{x}.
-#' @param c1 Pre-computed misclassification constant
-#'   \eqn{c_1 = p_{01}(1 - \pi)} (binary case, advanced use). Computed
-#'   from \code{p01} and \code{pi_z} when \code{NULL}.
-#' @param c2 Pre-computed misclassification constant
-#'   \eqn{c_2 = p_{01}(1 - \pi) - p_{10} \pi} (binary case, advanced
-#'   use). Computed from \code{p01}, \code{p10} and \code{pi_z} when
-#'   \code{NULL}.
 #' @param iterate Logical. If \code{TRUE}, iterate the BCA/BCM updates
 #'   to convergence (the iterated BCM solves the corrected score
 #'   equation; iterated BCA performs Newton steps on the additive
@@ -179,8 +171,8 @@
 #'   \code{list(z = true_codes, index = regression_row_numbers)}; proxy codes
 #'   are taken from those rows, which remain in the regression. Codes must be
 #'   numeric integers in \code{0, ..., K-1}, in the model's category order.
-#'   Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10}, or
-#'   \code{c1/c2}) computed from these same validation observations using
+#'   Supply \code{pi_z} and \code{Pi} (or binary \code{p01/p10/pi_z}) computed
+#'   from these same validation observations using
 #'   empirical proportions. This argument changes only the CS covariance,
 #'   adding validation uncertainty and, for internal validation, the overlap
 #'   covariance. Requires unweighted observations (or all weights equal to
@@ -313,7 +305,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
                   method = c("naive", "bca", "bcm", "cs"),
                   p01 = NULL, p10 = NULL, pi_z = NULL,
                   Pi = NULL, K = NULL,
-                  c1 = NULL, c2 = NULL, eta = NULL, w = NULL,
+                  eta = NULL, w = NULL,
                   iterate = FALSE,
                   jacobian = c("analytical", "numerical"),
                   fix_omega = FALSE,
@@ -381,13 +373,6 @@ mcglm <- function(formula, data = NULL, family = "poisson",
       (!is.numeric(pi_z) || !length(pi_z) || any(!is.finite(pi_z)) ||
        any(pi_z < 0 | pi_z > 1)))
     stop("pi_z must contain finite probabilities in [0, 1].", call. = FALSE)
-  for (nm in c("c1", "c2")) {
-    value <- get(nm)
-    if (!is.null(value) &&
-        (!is.numeric(value) || any(!is.finite(value)) || (length(value) != 1L && !is.null(data) && length(value) != nrow(data))))
-      stop(nm, " must be one finite numeric value or a vector of length n.", call. = FALSE)
-  }
-
   # --- Derive p01/p10 from 2x2 Pi ---
   if (!is.null(Pi) && nrow(Pi) == 2L) {
     if (is.null(p01)) p01 <- Pi[2, 1]
@@ -400,10 +385,12 @@ mcglm <- function(formula, data = NULL, family = "poisson",
     pi_z <- .mcglm_estimate_pi_z(as.integer(z_hat), Pi)
   }
 
-  # --- Derive c1/c2 from (p01, p10, pi_z) if not supplied directly ---
-  if (is.null(c1) && !is.null(p01) && !is.null(pi_z))
+  # --- Derive c1/c2 from (p01, p10, pi_z) ---
+  c1 <- NULL
+  c2 <- NULL
+  if (!is.null(p01) && !is.null(pi_z))
     c1 <- p01 * (1 - pi_z)
-  if (is.null(c2) && !is.null(p01) && !is.null(p10) && !is.null(pi_z))
+  if (!is.null(p01) && !is.null(p10) && !is.null(pi_z))
     c2 <- p01 * (1 - pi_z) - p10 * pi_z
 
   # --- Core fitting ---
@@ -708,7 +695,7 @@ mcglm <- function(formula, data = NULL, family = "poisson",
       needs_bca_bcm_cs <- any(method %in% c("bca", "bcm", "cs"))
       needs_onestep    <- "onestep" %in% method
       if (needs_bca_bcm_cs && (is.null(c1) || is.null(c2)))
-        stop("For binary bca/bcm/cs, supply c1 and c2 (or Pi, or p01/p10/pi_z).")
+        stop("For binary bca/bcm/cs, supply Pi, or p01/p10/pi_z (or eta, or validation).")
       if (needs_onestep && fix_omega && (is.null(p01) || is.null(p10) || is.null(pi_z)))
         stop("For onestep with fix_omega=TRUE, supply p01, p10, and pi_z.")
       if (needs_cs_akn) {
